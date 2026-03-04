@@ -52,6 +52,7 @@
 - **在线预览** - 支持图片、视频、音频、文档（pdf、docx、txt）格式的预览
 - **分片上传** - 支持最大 100MB 文件（配合 R2/S3）
 - **访客上传** - 可选的访客上传功能，支持文件大小和每日次数限制
+- **API Token 认证** - 支持 `curl` / ShareX / 脚本等程序化上传与调用
 - **多种视图** - 网格、列表、瀑布流多种管理界面
 - **存储分类** - 直观区分不同存储后端的文件
 - **双模部署** - 保留 Cloudflare Pages 部署，同时新增 Docker 自托管（`docker compose up -d`）
@@ -585,6 +586,79 @@ curl -X POST "http://127.0.0.1:8081/bot<YOUR_BOT_TOKEN>/setWebhook" \
 | `SETTINGS_REDIS_PREFIX` | Docker 自托管设置存储 Redis 键前缀 | 可选 |
 | `SETTINGS_REDIS_CONNECT_TIMEOUT_MS` | Docker 自托管 Redis 连接/心跳超时（毫秒） | 可选 |
 | `WEB_PORT` | `docker compose` 对外 Web 端口 | 可选 |
+
+---
+
+## API 使用指南
+
+### 1. 创建 API Token
+
+1. 打开管理面板 `/admin.html`
+2. 点击工具箱（Toolbox）菜单中的 **API Tokens**
+3. 创建 Token 时按需选择权限：`upload` / `read` / `delete` / `paste`，并设置过期时间
+
+### 2. 常用示例
+
+**curl 上传文件：**
+
+```bash
+curl -X POST https://your-kvault.com/api/v1/upload \
+  -H "Authorization: Bearer kvault_xxxxxxxxxxxx" \
+  -F "file=@/path/to/file.png"
+```
+
+**curl 上传并设置过期和密码：**
+
+```bash
+curl -X POST https://your-kvault.com/api/v1/upload \
+  -H "Authorization: Bearer kvault_xxxxxxxxxxxx" \
+  -F "file=@backup.tar.gz" \
+  -F "expires_in=86400" \
+  -F "password=mypassword"
+```
+
+**curl 创建文本粘贴：**
+
+```bash
+curl -X POST https://your-kvault.com/api/v1/paste \
+  -H "Authorization: Bearer kvault_xxxxxxxxxxxx" \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Hello World","language":"text"}'
+```
+
+**Shell 快捷函数（可加入 `.bashrc` / `.zshrc`）：**
+
+```bash
+kvault() {
+  curl -s -X POST "https://your-kvault.com/api/v1/upload" \
+    -H "Authorization: Bearer $KVAULT_TOKEN" \
+    -F "file=@$1" | jq -r '.links.share'
+}
+# 使用: kvault screenshot.png
+```
+
+### 3. ShareX 配置
+
+- Destination type: Image uploader / File uploader
+- Request URL: `https://your-kvault.com/api/v1/upload`
+- Headers: `Authorization: Bearer kvault_xxxxxxxxxxxx`
+- Body: Form data (`multipart/form-data`)
+- File form name: `file`
+- URL path: `$.links.download`（或 `$.links.share`）
+
+### 4. API 端点速查
+
+| Method | Endpoint | Scope | Description |
+| :--- | :--- | :--- | :--- |
+| POST | `/api/v1/upload` | `upload` | 上传文件（`multipart/form-data`，字段 `file`） |
+| GET | `/api/v1/files` | `read` | 列出文件（支持分页） |
+| GET | `/api/v1/file/:id` | `read` | 下载文件 |
+| GET | `/api/v1/file/:id/info` | `read` | 获取文件元信息 |
+| DELETE | `/api/v1/file/:id` | `delete` | 删除文件 |
+| POST | `/api/v1/paste` | `paste` | 创建文本粘贴 |
+| GET | `/api/v1/pastes` | `read` | 列出粘贴（支持分页） |
+| GET | `/api/v1/paste/:id` | `read` | 获取粘贴内容 |
+| DELETE | `/api/v1/paste/:id` | `delete` | 删除粘贴 |
 
 ---
 

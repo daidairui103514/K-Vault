@@ -368,6 +368,97 @@
       background: rgba(16, 27, 44, 0.9);
       color: #d5e3ff;
     }
+    .token-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .token-loading,
+    .token-empty {
+      padding: 18px 14px;
+      border-radius: 10px;
+      border: 1px dashed rgba(64, 158, 255, 0.45);
+      background: rgba(245, 250, 255, 0.75);
+      text-align: center;
+      color: #4a5f7a;
+      margin-bottom: 8px;
+    }
+    .token-empty i {
+      font-size: 20px;
+      margin-bottom: 8px;
+      color: #409eff;
+    }
+    .token-scope-tag {
+      margin-right: 4px;
+      margin-bottom: 4px;
+      text-transform: lowercase;
+    }
+    .token-time-hint {
+      color: #8a96a8;
+      font-size: 12px;
+    }
+    .token-scope-group {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px 10px;
+    }
+    .token-scope-group .el-checkbox {
+      margin-right: 0;
+    }
+    .token-once-warning {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(230, 162, 60, 0.5);
+      background: rgba(230, 162, 60, 0.1);
+      color: #8d5d00;
+      font-weight: 600;
+    }
+    .token-created-actions {
+      margin-top: 12px;
+      text-align: right;
+    }
+    .token-status-text {
+      display: inline-block;
+      margin-left: 8px;
+      min-width: 58px;
+      text-align: left;
+      font-size: 12px;
+      color: #f56c6c;
+    }
+    .token-status-text.is-enabled {
+      color: #67c23a;
+    }
+    html[data-theme="dark"] .token-loading,
+    html[data-theme="dark"] .token-empty {
+      background: rgba(20, 34, 55, 0.85);
+      border-color: rgba(122, 183, 255, 0.45);
+      color: #d7e6ff;
+    }
+    html[data-theme="dark"] .token-time-hint {
+      color: #9eb2d8;
+    }
+    html[data-theme="dark"] .token-once-warning {
+      background: rgba(230, 162, 60, 0.18);
+      border-color: rgba(230, 162, 60, 0.5);
+      color: #ffd997;
+    }
+    html[data-theme="dark"] .token-status-text {
+      color: #ff9a9a;
+    }
+    html[data-theme="dark"] .token-status-text.is-enabled {
+      color: #8edc8e;
+    }
+    @media (max-width: 768px) {
+      .token-scope-group {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
   <link rel="stylesheet" href="/mobile-refactor.css">
 </head>
@@ -466,6 +557,7 @@
                 <el-dropdown-item command="editWebsites"><i class="fas fa-edit"></i> 编辑快捷方式</el-dropdown-item>
                 <el-dropdown-item command="openUploader"><i class="fas fa-cloud-upload-alt"></i> 打开上传中心</el-dropdown-item>
                 <el-dropdown-item command="exportLinks"><i class="fas fa-file-export"></i> 导出全部链接</el-dropdown-item>
+                <el-dropdown-item command="manageApiTokens"><i class="fas fa-key"></i> API Tokens</el-dropdown-item>
                 <el-dropdown-item command="checkStatus" divided><i class="fas fa-heartbeat"></i> 检查连接状态</el-dropdown-item>
               </el-dropdown-menu>
             </el-dropdown>
@@ -804,6 +896,153 @@
         </el-footer>
       </el-main>
     </el-container>
+    <el-dialog
+      title="API Token Management"
+      :visible.sync="tokenDialogVisible"
+      width="860px"
+      custom-class="token-manager-dialog">
+      <div class="token-toolbar">
+        <el-button size="mini" type="primary" icon="el-icon-plus" @click="openCreateTokenDialog">Create Token</el-button>
+        <el-button size="mini" icon="el-icon-refresh" :loading="tokenLoading" @click="loadApiTokens">Refresh</el-button>
+      </div>
+      <div v-if="tokenLoading" class="token-loading">
+        <i class="el-icon-loading"></i> Loading tokens...
+      </div>
+      <div v-else-if="apiTokens.length === 0" class="token-empty">
+        <i class="fas fa-key"></i>
+        <p>No API token yet. Create one for scripts, curl, or ShareX uploads.</p>
+      </div>
+      <el-table
+        v-else
+        :data="apiTokens"
+        stripe
+        border
+        size="mini"
+        row-key="id">
+        <el-table-column prop="name" label="Name" min-width="170"></el-table-column>
+        <el-table-column label="Scopes" min-width="190">
+          <template slot-scope="scope">
+            <el-tag
+              v-for="scopeName in scope.row.scopes"
+              :key="scope.row.id + '-' + scopeName"
+              size="mini"
+              :type="tokenScopeTagType(scopeName)"
+              class="token-scope-tag">
+              {{ scopeName }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="Created" min-width="140">
+          <template slot-scope="scope">
+            <div>{{ formatDateTime(scope.row.createdAt) }}</div>
+            <small class="token-time-hint">{{ formatRelativeTime(scope.row.createdAt) }}</small>
+          </template>
+        </el-table-column>
+        <el-table-column label="Last Used" min-width="140">
+          <template slot-scope="scope">
+            <span v-if="scope.row.lastUsedAt">{{ formatRelativeTime(scope.row.lastUsedAt) }}</span>
+            <span v-else class="token-time-hint">Never used</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Preview" min-width="122">
+          <template slot-scope="scope">
+            <code>{{ scope.row.tokenPreview }}</code>
+          </template>
+        </el-table-column>
+        <el-table-column label="Status" width="176" align="center">
+          <template slot-scope="scope">
+            <el-switch
+              v-model="scope.row.enabled"
+              :disabled="Boolean(tokenMutatingMap[scope.row.id])"
+              active-color="#13ce66"
+              inactive-color="#ff6b6b"
+              @change="toggleApiTokenEnabled(scope.row)">
+            </el-switch>
+            <span class="token-status-text" :class="{ 'is-enabled': scope.row.enabled }">
+              {{ scope.row.enabled ? 'Enabled' : 'Disabled' }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="Actions" width="86" align="center">
+          <template slot-scope="scope">
+            <el-button
+              type="text"
+              style="color:#f56c6c"
+              :disabled="Boolean(tokenMutatingMap[scope.row.id])"
+              @click="removeApiToken(scope.row)">
+              Delete
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
+
+    <el-dialog
+      title="Create API Token"
+      :visible.sync="createTokenDialogVisible"
+      width="560px"
+      append-to-body
+      custom-class="token-create-dialog">
+      <el-form label-position="top" size="small">
+        <el-form-item label="Token Name">
+          <el-input v-model="tokenForm.name" maxlength="64" placeholder="e.g. ShareX Upload / CI Backup"></el-input>
+        </el-form-item>
+        <el-form-item label="Permissions">
+          <el-checkbox-group v-model="tokenForm.scopes" class="token-scope-group">
+            <el-checkbox label="upload"><i class="fas fa-upload"></i> Upload file</el-checkbox>
+            <el-checkbox label="read"><i class="fas fa-eye"></i> Read/list/download</el-checkbox>
+            <el-checkbox label="delete"><i class="fas fa-trash-alt"></i> Delete file/paste</el-checkbox>
+            <el-checkbox label="paste"><i class="fas fa-file-alt"></i> Create paste</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="Expiry">
+          <el-select v-model="tokenForm.expiryPreset" placeholder="Select expiry" style="width:100%;">
+            <el-option label="Never expires" value="never"></el-option>
+            <el-option label="7 days" value="7d"></el-option>
+            <el-option label="30 days" value="30d"></el-option>
+            <el-option label="90 days" value="90d"></el-option>
+            <el-option label="Custom date/time" value="custom"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="tokenForm.expiryPreset === 'custom'" label="Custom Expiry Date">
+          <el-date-picker
+            v-model="tokenForm.customExpiresAt"
+            type="datetime"
+            style="width:100%;"
+            value-format="timestamp"
+            placeholder="Select date and time">
+          </el-date-picker>
+        </el-form-item>
+      </el-form>
+      <span slot="footer" class="dialog-footer">
+        <el-button size="small" @click="createTokenDialogVisible = false">Cancel</el-button>
+        <el-button size="small" type="primary" :loading="tokenCreateLoading" @click="createApiToken">Create</el-button>
+      </span>
+    </el-dialog>
+
+    <el-dialog
+      title="Token Created"
+      :visible.sync="createdTokenDialogVisible"
+      width="620px"
+      append-to-body
+      custom-class="token-created-dialog">
+      <div class="token-once-warning">
+        <i class="fas fa-exclamation-triangle"></i>
+        This is the only time the full token is shown. Copy it now.
+      </div>
+      <el-input
+        type="textarea"
+        :rows="3"
+        readonly
+        :value="createdTokenValue">
+      </el-input>
+      <div class="token-created-actions">
+        <el-button size="small" type="primary" @click="copyCreatedTokenValue">
+          {{ createdTokenCopied ? 'Copied ✓' : 'Copy Token' }}
+        </el-button>
+      </div>
+    </el-dialog>
+
     <!-- 预览弹窗 - 模态框模式（不跳转新标签页） -->
     <div class="preview-modal" v-if="previewData" @click="closePreview">
       <button class="preview-close" @click.stop="closePreview">
@@ -954,6 +1193,21 @@
         { name: 'YouCompress', url: 'https://www.youcompress.com/zh-cn/', icon: 'fas fa-file-zipper' },
         { name: 'Cloudinary', url: 'https://console.cloudinary.com/', icon: 'fas fa-cloud' },
       ],
+      tokenDialogVisible: false,
+      tokenLoading: false,
+      createTokenDialogVisible: false,
+      tokenCreateLoading: false,
+      createdTokenDialogVisible: false,
+      createdTokenValue: '',
+      createdTokenCopied: false,
+      apiTokens: [],
+      tokenMutatingMap: {},
+      tokenForm: {
+        name: '',
+        scopes: ['upload', 'read'],
+        expiryPreset: 'never',
+        customExpiresAt: '',
+      },
     },
     computed: {
       filteredTableData() {
@@ -1146,6 +1400,188 @@
       isUnconfiguredStatus(item = {}) {
         const message = String(item?.message || '').trim().toLowerCase();
         return message === '未配置' || message === 'not configured' || message.includes('not configured');
+      },
+      tokenScopeTagType(scopeName = '') {
+        const map = {
+          upload: '',
+          read: 'success',
+          delete: 'danger',
+          paste: 'warning',
+        };
+        return map[String(scopeName || '').toLowerCase()] || 'info';
+      },
+      formatDateTime(timestamp) {
+        const value = Number(timestamp || 0);
+        if (!Number.isFinite(value) || value <= 0) return '-';
+        return new Date(value).toLocaleString('zh-CN', { hour12: false });
+      },
+      formatRelativeTime(timestamp) {
+        const value = Number(timestamp || 0);
+        if (!Number.isFinite(value) || value <= 0) return 'Never';
+        const diff = Date.now() - value;
+        const minute = 60 * 1000;
+        const hour = 60 * minute;
+        const day = 24 * hour;
+        if (diff < minute) return 'Just now';
+        if (diff < hour) return `${Math.floor(diff / minute)} min ago`;
+        if (diff < day) return `${Math.floor(diff / hour)} hr ago`;
+        if (diff < day * 30) return `${Math.floor(diff / day)} day ago`;
+        return this.formatDateTime(value);
+      },
+      openApiTokenDialog() {
+        this.tokenDialogVisible = true;
+        this.loadApiTokens();
+      },
+      openCreateTokenDialog() {
+        this.tokenForm = {
+          name: '',
+          scopes: ['upload', 'read'],
+          expiryPreset: 'never',
+          customExpiresAt: '',
+        };
+        this.createTokenDialogVisible = true;
+      },
+      resolveTokenExpiresAt() {
+        const preset = String(this.tokenForm.expiryPreset || 'never');
+        if (preset === '7d') return Date.now() + 7 * 24 * 3600 * 1000;
+        if (preset === '30d') return Date.now() + 30 * 24 * 3600 * 1000;
+        if (preset === '90d') return Date.now() + 90 * 24 * 3600 * 1000;
+        if (preset === 'custom') {
+          const custom = Number(this.tokenForm.customExpiresAt || 0);
+          return Number.isFinite(custom) && custom > Date.now() ? custom : null;
+        }
+        return null;
+      },
+      async loadApiTokens() {
+        this.tokenLoading = true;
+        try {
+          const response = await fetch('./api/admin/tokens', {
+            method: 'GET',
+            credentials: 'include',
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload?.success) {
+            throw new Error(payload?.error?.message || payload?.message || 'Failed to load tokens.');
+          }
+          this.apiTokens = Array.isArray(payload.tokens) ? payload.tokens : [];
+        } catch (error) {
+          this.$message.error(error.message || 'Failed to load API tokens.');
+        } finally {
+          this.tokenLoading = false;
+        }
+      },
+      async createApiToken() {
+        const name = String(this.tokenForm.name || '').trim();
+        const scopes = Array.isArray(this.tokenForm.scopes) ? this.tokenForm.scopes : [];
+        if (!name) {
+          this.$message.warning('Token name is required.');
+          return;
+        }
+        if (scopes.length === 0) {
+          this.$message.warning('Select at least one permission.');
+          return;
+        }
+        const expiresAt = this.resolveTokenExpiresAt();
+        if (String(this.tokenForm.expiryPreset) === 'custom' && !expiresAt) {
+          this.$message.warning('Please select a valid future expiry date.');
+          return;
+        }
+        this.tokenCreateLoading = true;
+        try {
+          const response = await fetch('./api/admin/tokens', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name,
+              scopes,
+              expiresAt,
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload?.success) {
+            throw new Error(payload?.error?.message || payload?.message || 'Failed to create token.');
+          }
+          this.createTokenDialogVisible = false;
+          this.createdTokenValue = String(payload.token || '');
+          this.createdTokenCopied = false;
+          this.createdTokenDialogVisible = true;
+          await this.loadApiTokens();
+        } catch (error) {
+          this.$message.error(error.message || 'Failed to create token.');
+        } finally {
+          this.tokenCreateLoading = false;
+        }
+      },
+      async copyCreatedTokenValue() {
+        const token = String(this.createdTokenValue || '');
+        if (!token) return;
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(token);
+          } else {
+            this.copyToClipboardFallback(token);
+          }
+          this.createdTokenCopied = true;
+        } catch {
+          this.copyToClipboardFallback(token);
+          this.createdTokenCopied = true;
+        }
+      },
+      async toggleApiTokenEnabled(token) {
+        const tokenId = token?.id;
+        if (!tokenId) return;
+        const nextEnabled = Boolean(token.enabled);
+        this.$set(this.tokenMutatingMap, tokenId, true);
+        try {
+          const response = await fetch(`./api/admin/tokens/${encodeURIComponent(tokenId)}`, {
+            method: 'PATCH',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: nextEnabled }),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload?.success) {
+            throw new Error(payload?.error?.message || payload?.message || 'Failed to update token status.');
+          }
+          this.$message.success(nextEnabled ? 'Token enabled.' : 'Token disabled.');
+        } catch (error) {
+          token.enabled = !nextEnabled;
+          this.$message.error(error.message || 'Failed to update token status.');
+        } finally {
+          this.$delete(this.tokenMutatingMap, tokenId);
+        }
+      },
+      async removeApiToken(token) {
+        const tokenId = token?.id;
+        if (!tokenId) return;
+        try {
+          await this.$confirm(`Delete token "${token.name}" ?`, 'Confirm', {
+            type: 'warning',
+            confirmButtonText: 'Delete',
+            cancelButtonText: 'Cancel',
+          });
+        } catch {
+          return;
+        }
+
+        this.$set(this.tokenMutatingMap, tokenId, true);
+        try {
+          const response = await fetch(`./api/admin/tokens/${encodeURIComponent(tokenId)}`, {
+            method: 'DELETE',
+            credentials: 'include',
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload?.success) {
+            throw new Error(payload?.error?.message || payload?.message || 'Failed to delete token.');
+          }
+          this.apiTokens = this.apiTokens.filter((item) => item.id !== tokenId);
+          this.$message.success('Token deleted.');
+        } catch (error) {
+          this.$message.error(error.message || 'Failed to delete token.');
+        } finally {
+          this.$delete(this.tokenMutatingMap, tokenId);
+        }
       },
       updateViewportFlags() {
         this.isMobileViewport = window.matchMedia('(max-width: 900px)').matches;
@@ -2599,6 +3035,7 @@
           case 'editWebsites': this.editWebsites(); break;
           case 'openUploader': this.openUploader(); break;
           case 'exportLinks': this.exportAllLinks(); break;
+          case 'manageApiTokens': this.openApiTokenDialog(); break;
           case 'checkStatus': this.checkConnectionStatus(); break;
         }
       },

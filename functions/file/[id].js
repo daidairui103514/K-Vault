@@ -77,42 +77,50 @@ export async function onRequest(context) {
     return handleSignedTelegramFile(context, signedTelegramMeta);
   }
 
-  // Fast path by prefix.
-  if (fileId.startsWith('r2:')) return handleR2File(context, fileId.slice(3));
-  if (fileId.startsWith('s3:')) return handleS3File(context, fileId);
-  if (fileId.startsWith('discord:')) return handleDiscordFile(context, fileId);
-  if (fileId.startsWith('hf:')) return handleHFFile(context, fileId);
-  if (fileId.startsWith('webdav:')) return handleWebDAVFile(context, fileId);
-  if (fileId.startsWith('github:')) return handleGitHubFile(context, fileId);
-
   const recordResult = await getRecordWithKey(env, fileId);
   const record = recordResult?.record;
+  const kvKey = recordResult?.kvKey || fileId;
 
   if (env.img_url && !record?.metadata) {
     return errorResponse('File not found', 404);
   }
 
-  const storageType = inferStorageType(fileId, record?.metadata || {});
-  if (storageType === 'r2') {
-    return handleR2File(context, record?.metadata?.r2Key || fileId, record);
-  }
-  if (storageType === 's3') {
-    return handleS3File(context, fileId, record);
-  }
-  if (storageType === 'discord') {
-    return handleDiscordFile(context, fileId, record);
-  }
-  if (storageType === 'huggingface') {
-    return handleHFFile(context, fileId, record);
-  }
-  if (storageType === 'webdav') {
-    return handleWebDAVFile(context, fileId, record);
-  }
-  if (storageType === 'github') {
-    return handleGitHubFile(context, fileId, record);
+  let shareAccess = null;
+  if (record?.metadata) {
+    shareAccess = await verifyShareAccess(context, record.metadata, kvKey);
+    if (shareAccess?.response) {
+      return shareAccess.response;
+    }
   }
 
-  return handleTelegramFile(context, fileId, record);
+  const storageType = inferStorageType(fileId, record?.metadata || {});
+  let response;
+  if (storageType === 'r2') {
+    response = await handleR2File(context, record?.metadata?.r2Key || fileId, record);
+  } else if (storageType === 's3') {
+    response = await handleS3File(context, fileId, record);
+  } else if (storageType === 'discord') {
+    response = await handleDiscordFile(context, fileId, record);
+  } else if (storageType === 'huggingface') {
+    response = await handleHFFile(context, fileId, record);
+  } else if (storageType === 'webdav') {
+    response = await handleWebDAVFile(context, fileId, record);
+  } else if (storageType === 'github') {
+    response = await handleGitHubFile(context, fileId, record);
+  } else {
+    response = await handleTelegramFile(context, fileId, record);
+  }
+
+  if (shareAccess?.trackDownload && shouldCountAsDownload(request.method, response)) {
+    const updatePromise = incrementShareDownloadCount(env, shareAccess.kvKey, shareAccess.metadata);
+    if (typeof context.waitUntil === 'function') {
+      context.waitUntil(updatePromise.catch(() => {}));
+    } else {
+      updatePromise.catch(() => {});
+    }
+  }
+
+  return response;
 }
 
 function inferStorageType(name, metadata = {}) {
@@ -210,6 +218,80 @@ async function getRecordWithKey(env, fileId) {
   }
 
   return { record: null, kvKey: fileId };
+}
+
+function getSharePassword(request) {
+  const url = new URL(request.url);
+  return String(
+    url.searchParams.get('password')
+    || request.headers.get('X-File-Password')
+    || request.headers.get('X-Share-Password')
+    || ''
+  );
+}
+
+async function sha256Hex(input) {
+  const bytes = new TextEncoder().encode(String(input || ''));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function timingSafeEqual(a, b) {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+async function verifyShareAccess(context, metadata = {}, kvKey = '') {
+  const expiresAt = Number(metadata.shareExpiresAt || 0);
+  if (Number.isFinite(expiresAt) && expiresAt > 0 && Date.now() > expiresAt) {
+    return { response: errorResponse('File link has expired', 410) };
+  }
+
+  const maxDownloads = Number(metadata.shareMaxDownloads || 0);
+  const currentDownloads = Number(metadata.shareDownloadCount || 0);
+  if (Number.isFinite(maxDownloads) && maxDownloads > 0 && currentDownloads >= maxDownloads) {
+    return { response: errorResponse('File download limit reached', 410) };
+  }
+
+  if (metadata.sharePasswordHash) {
+    const providedPassword = getSharePassword(context.request);
+    if (!providedPassword) {
+      return { response: errorResponse('File password required', 401) };
+    }
+    const expected = await sha256Hex(`${String(metadata.sharePasswordSalt || '')}:${providedPassword}`);
+    if (!timingSafeEqual(String(metadata.sharePasswordHash || ''), expected)) {
+      return { response: errorResponse('File password invalid', 403) };
+    }
+  }
+
+  return {
+    response: null,
+    trackDownload: Number.isFinite(maxDownloads) && maxDownloads > 0,
+    kvKey,
+    metadata,
+  };
+}
+
+function shouldCountAsDownload(method, response) {
+  if (String(method || '').toUpperCase() !== 'GET') return false;
+  if (!response) return false;
+  return response.status === 200 || response.status === 206;
+}
+
+async function incrementShareDownloadCount(env, kvKey, metadata = {}) {
+  if (!env?.img_url || !kvKey || !metadata) return;
+  const nextCount = Number(metadata.shareDownloadCount || 0) + 1;
+  const nextMetadata = {
+    ...metadata,
+    shareDownloadCount: nextCount,
+  };
+  await env.img_url.put(kvKey, '', { metadata: nextMetadata });
 }
 
 async function handleTelegramFile(context, fileId, record = null) {

@@ -39,6 +39,7 @@ export async function onRequest(context) {
       if (!r2Key) throw new Error('Failed to resolve R2 key.');
 
       await env.R2_BUCKET.delete(r2Key);
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -59,6 +60,7 @@ export async function onRequest(context) {
       } catch (error) {
         console.error('S3 delete error (best-effort):', error);
       }
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -84,6 +86,7 @@ export async function onRequest(context) {
         console.error('Discord delete error (best-effort):', error);
       }
 
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -105,6 +108,7 @@ export async function onRequest(context) {
         console.error('HuggingFace delete error (best-effort):', error);
       }
 
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -127,6 +131,7 @@ export async function onRequest(context) {
         console.error('WebDAV delete error (best-effort):', error);
       }
 
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -147,6 +152,7 @@ export async function onRequest(context) {
         console.error('GitHub delete error (best-effort):', error);
       }
 
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
 
@@ -171,6 +177,7 @@ export async function onRequest(context) {
       telegramDeleteError = error;
       console.error('Telegram deleteMessage threw:', error);
     } finally {
+      await cleanupShareSlugMapping(env, metadata, kvKey);
       await env.img_url.delete(kvKey);
       await purgeEdgeCache(request, fileId);
     }
@@ -257,4 +264,26 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+function sanitizeSlug(rawValue = '') {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,64}$/.test(value)) return '';
+  return value;
+}
+
+async function cleanupShareSlugMapping(env, metadata = {}, kvKey = '') {
+  if (!env?.img_url || !kvKey) return;
+  const slug = sanitizeSlug(metadata?.shareSlug || '');
+  if (!slug) return;
+
+  try {
+    const mapKey = `share_slug:${slug}`;
+    const mapped = await env.img_url.get(mapKey);
+    if (!mapped || String(mapped) === String(kvKey)) {
+      await env.img_url.delete(mapKey);
+    }
+  } catch (error) {
+    console.warn('Failed to cleanup share slug mapping:', error?.message || error);
+  }
 }

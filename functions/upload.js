@@ -36,7 +36,9 @@ export async function onRequestPost(context) {
     const fileExtension = normalizeFileExtension(fileName);
     const folderPath = normalizeFolderPath(formData.get("folderPath"));
 
-    const isAdmin = await isUserAuthenticated(context);
+    // API v1 token-authenticated requests should bypass guest limits.
+    const isApiTokenRequest = Boolean(context?.data?.apiToken);
+    const isAdmin = isApiTokenRequest || await isUserAuthenticated(context);
     if (!isAdmin) {
       const guestCheck = await checkGuestUpload(request, env, uploadFile.size);
       if (!guestCheck.allowed) {
